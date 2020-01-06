@@ -34,6 +34,11 @@ impl Serializer {
     fn append_string(&mut self, data: String) {
         self.0.push(Cow::Owned(data.into_bytes()))
     }
+    fn serialize_simple_string(&mut self, num: String) {
+        self.append("\"");
+        self.append_string(num);
+        self.append("\"");
+    }
 }
 impl<'a> ser::Serializer for &'a mut Serializer {
     type Ok = ();
@@ -69,7 +74,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_i64(self, v: i64) -> Result<()> {
-        self.serialize_str(&v.to_string())
+        self.serialize_simple_string(v.to_string());
+        Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
@@ -88,17 +94,20 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
-        self.serialize_str(&v.to_string())
+        self.serialize_simple_string(v.to_string());
+        Ok(())
     }
 
     serde_if_integer128! {
 
         fn serialize_u128(self, v: u128) -> Result<()> {
-            self.serialize_str(&v.to_string())
+            self.serialize_simple_string(v.to_string());
+            Ok(())
         }
 
         fn serialize_i128(self, v: i128) -> Result<()> {
-            self.serialize_str(&v.to_string())
+            self.serialize_simple_string(v.to_string());
+            Ok(())
         }
 
     }
@@ -133,7 +142,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
-        self.serialize_str(&base64::encode_config(v, base64::URL_SAFE))
+        self.serialize_simple_string(base64::encode_config(v, base64::URL_SAFE));
+        Ok(())
     }
 
     fn serialize_none(self) -> Result<()> {
