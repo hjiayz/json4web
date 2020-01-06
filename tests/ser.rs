@@ -1,12 +1,15 @@
 #![no_std]
 #[macro_use]
 extern crate alloc;
+#[macro_use]
+extern crate wasm_bindgen_test;
 
 use alloc::vec::Vec;
 use json4web::ser::*;
 use serde_derive::Serialize;
 
 #[test]
+#[wasm_bindgen_test]
 fn test_struct() {
     #[derive(Serialize)]
     struct Test {
@@ -23,6 +26,7 @@ fn test_struct() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn test_enum() {
     #[derive(Serialize)]
     enum E {
@@ -50,6 +54,7 @@ fn test_enum() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn test_bytes() {
     use serde_bytes::Bytes;
     let bytes = &Bytes::new(b"bytes test");
@@ -58,6 +63,7 @@ fn test_bytes() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn test_bool() {
     let b = true;
     let expected = "1";

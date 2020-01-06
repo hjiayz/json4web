@@ -2,6 +2,8 @@
 
 #[macro_use]
 extern crate alloc;
+#[macro_use]
+extern crate wasm_bindgen_test;
 
 use alloc::borrow::ToOwned;
 use alloc::string::String;
@@ -10,6 +12,7 @@ use json4web::de::*;
 use serde_derive::Deserialize;
 
 #[test]
+#[wasm_bindgen_test]
 fn test_struct() {
     #[derive(Deserialize, PartialEq, Debug)]
     struct Test {
@@ -26,6 +29,7 @@ fn test_struct() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn test_enum() {
     #[derive(Deserialize, PartialEq, Debug)]
     enum E {
@@ -53,7 +57,8 @@ fn test_enum() {
 }
 
 #[test]
-fn test_bytes() {
+#[wasm_bindgen_test]
+pub fn test_bytes() {
     #[derive(Deserialize, PartialEq, Debug)]
     struct B {
         #[serde(with = "serde_bytes")]
@@ -83,6 +88,7 @@ fn test_bytes() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn test_bool() {
     let expected = true;
     let j = "1";
