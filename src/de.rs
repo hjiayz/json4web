@@ -1,17 +1,18 @@
 use crate::{Error, Result};
+use core::num::ParseFloatError;
+use core::num::ParseIntError;
+use core::str::FromStr;
 use serde::de::{
     self, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess, VariantAccess,
     Visitor,
 };
-use std::num::ParseFloatError;
-use std::num::ParseIntError;
-use std::str::FromStr;
+use serde::serde_if_integer128;
 
 pub fn from_slice<'a, T>(input: &'a [u8]) -> Result<T>
 where
     T: serde::Deserialize<'a>,
 {
-    use std::str;
+    use core::str;
     from_str(str::from_utf8(input)?)
 }
 
@@ -226,6 +227,26 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     {
         self.trim_start();
         visitor.visit_u64(u64::from_str(self.parse_string()?)?)
+    }
+
+    serde_if_integer128! {
+
+        fn deserialize_u128<V>(self, visitor: V) -> Result<V::Value>
+        where
+            V: Visitor<'de>,
+        {
+            self.trim_start();
+            visitor.visit_u128(u128::from_str(self.parse_string()?)?)
+        }
+
+        fn deserialize_i128<V>(self, visitor: V) -> Result<V::Value>
+        where
+            V: Visitor<'de>,
+        {
+            self.trim_start();
+            visitor.visit_i128(i128::from_str(self.parse_string()?)?)
+        }
+
     }
 
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value>

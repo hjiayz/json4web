@@ -1,3 +1,8 @@
+#![no_std]
+#[macro_use]
+extern crate alloc;
+
+use alloc::vec::Vec;
 use json4web::ser::*;
 use serde_derive::Serialize;
 

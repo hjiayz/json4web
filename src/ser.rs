@@ -1,79 +1,70 @@
+use alloc::borrow::Cow;
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use serde::serde_if_integer128;
 use serde::{ser, Serialize};
-use std::io::Write;
 
 use crate::{Error, Result};
 
-pub struct Serializer<W> {
-    writer: W,
-}
-
-pub fn to_buf<T, B>(value: &T, buf: &mut B) -> Result<()>
-where
-    T: Serialize,
-    B: Write,
-{
-    let mut serializer = Serializer { writer: buf };
-    value.serialize(&mut serializer)
-}
-
-pub fn to_vec<T>(value: &T) -> Result<Vec<u8>>
-where
-    T: Serialize,
-{
-    let mut vec = Vec::new();
-    to_buf(value, &mut vec)?;
-    Ok(vec)
-}
+pub struct Serializer(Vec<Cow<'static, [u8]>>);
 
 pub fn to_string<T>(value: &T) -> Result<String>
 where
     T: Serialize,
 {
-    unsafe { Ok(String::from_utf8_unchecked(to_vec(value)?)) }
+    let mut serializer = Serializer(Vec::new());
+    value.serialize(&mut serializer)?;
+    let mut len = 0;
+    for s in serializer.0.iter() {
+        len += s.len();
+    }
+    let mut result = Vec::with_capacity(len);
+    for s in serializer.0.iter() {
+        result.extend_from_slice(&s);
+    }
+    Ok(unsafe { String::from_utf8_unchecked(result) })
 }
 
-impl<'a, W> Serializer<W>
-where
-    W: Write,
-{
-    fn append(&mut self, data: &str) -> Result<()> {
-        self.writer.write_all(data.as_bytes())?;
-        Ok(())
+impl Serializer {
+    fn append(&mut self, data: &'static str) {
+        self.0.push(Cow::Borrowed(data.as_bytes()))
+    }
+    fn append_string(&mut self, data: String) {
+        self.0.push(Cow::Owned(data.into_bytes()))
     }
 }
-impl<'a, W> ser::Serializer for &'a mut Serializer<W>
-where
-    W: Write,
-{
+impl<'a> ser::Serializer for &'a mut Serializer {
     type Ok = ();
 
     type Error = Error;
 
-    type SerializeSeq = Compound<'a, W>;
-    type SerializeTuple = Compound<'a, W>;
-    type SerializeTupleStruct = Compound<'a, W>;
-    type SerializeTupleVariant = Compound<'a, W>;
-    type SerializeMap = Compound<'a, W>;
-    type SerializeStruct = Compound<'a, W>;
-    type SerializeStructVariant = Compound<'a, W>;
+    type SerializeSeq = Compound<'a>;
+    type SerializeTuple = Compound<'a>;
+    type SerializeTupleStruct = Compound<'a>;
+    type SerializeTupleVariant = Compound<'a>;
+    type SerializeMap = Compound<'a>;
+    type SerializeStruct = Compound<'a>;
+    type SerializeStructVariant = Compound<'a>;
 
     fn serialize_bool(self, v: bool) -> Result<()> {
-        self.append(if v { "1" } else { "0" })?;
+        self.append(if v { "1" } else { "0" });
         Ok(())
     }
 
     fn serialize_i8(self, v: i8) -> Result<()> {
-        self.append(&v.to_string())?;
+        self.append_string(v.to_string());
         Ok(())
     }
 
     fn serialize_i16(self, v: i16) -> Result<()> {
-        self.append(&v.to_string())?;
+        self.append_string(v.to_string());
         Ok(())
     }
 
     fn serialize_i32(self, v: i32) -> Result<()> {
-        self.append(&v.to_string())?;
+        self.append_string(v.to_string());
         Ok(())
     }
 
@@ -82,17 +73,17 @@ where
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
-        self.append(&v.to_string())?;
+        self.append_string(v.to_string());
         Ok(())
     }
 
     fn serialize_u16(self, v: u16) -> Result<()> {
-        self.append(&v.to_string())?;
+        self.append_string(v.to_string());
         Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<()> {
-        self.append(&v.to_string())?;
+        self.append_string(v.to_string());
         Ok(())
     }
 
@@ -100,12 +91,24 @@ where
         self.serialize_str(&v.to_string())
     }
 
+    serde_if_integer128! {
+
+        fn serialize_u128(self, v: u128) -> Result<()> {
+            self.serialize_str(&v.to_string())
+        }
+
+        fn serialize_i128(self, v: i128) -> Result<()> {
+            self.serialize_str(&v.to_string())
+        }
+
+    }
+
     fn serialize_f32(self, v: f32) -> Result<()> {
         if v.is_finite() {
             return Err(Error::NaN);
         }
         let mut buffer = ryu::Buffer::new();
-        self.append(buffer.format_finite(v))?;
+        self.append_string(buffer.format_finite(v).to_owned());
         Ok(())
     }
 
@@ -114,7 +117,7 @@ where
             return Err(Error::NaN);
         }
         let mut buffer = ryu::Buffer::new();
-        self.append(buffer.format_finite(v))?;
+        self.append_string(buffer.format_finite(v).to_owned());
         Ok(())
     }
 
@@ -123,9 +126,9 @@ where
     }
 
     fn serialize_str(self, v: &str) -> Result<()> {
-        self.append("\"")?;
-        self.append(&v.escape_default().to_string())?;
-        self.append("\"")?;
+        self.append("\"");
+        self.append_string(v.escape_default().to_string());
+        self.append("\"");
         Ok(())
     }
 
@@ -145,7 +148,7 @@ where
     }
 
     fn serialize_unit(self) -> Result<()> {
-        self.append("null")?;
+        self.append("null");
         Ok(())
     }
 
@@ -179,16 +182,16 @@ where
     where
         T: ?Sized + Serialize,
     {
-        self.append("{")?;
+        self.append("{");
         variant.serialize(&mut *self)?;
-        self.append(":")?;
+        self.append(":");
         value.serialize(&mut *self)?;
-        self.append("}")?;
+        self.append("}");
         Ok(())
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        self.append("[")?;
+        self.append("[");
         Ok(Compound(self, true))
     }
 
@@ -211,14 +214,14 @@ where
         variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.append("{")?;
+        self.append("{");
         variant.serialize(&mut *self)?;
-        self.append(":[")?;
+        self.append(":[");
         Ok(Compound(self, true))
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        self.append("{")?;
+        self.append("{");
         Ok(Compound(self, true))
     }
 
@@ -233,19 +236,16 @@ where
         variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        self.append("{")?;
+        self.append("{");
         variant.serialize(&mut *self)?;
-        self.append(":{")?;
+        self.append(":{");
         Ok(Compound(self, true))
     }
 }
 
-pub struct Compound<'a, W>(&'a mut Serializer<W>, bool);
-impl<'a, W> Compound<'a, W>
-where
-    W: Write,
-{
-    fn append(&mut self, data: &str) -> Result<()> {
+pub struct Compound<'a>(&'a mut Serializer, bool);
+impl<'a> Compound<'a> {
+    fn append(&mut self, data: &'static str) {
         self.0.append(data)
     }
     fn first(&mut self) -> bool {
@@ -255,10 +255,7 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeSeq for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeSeq for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -267,21 +264,18 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("]")?;
+        self.append("]");
         Ok(())
     }
 }
 
-impl<'a, W> ser::SerializeTuple for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeTuple for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -290,21 +284,18 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("]")?;
+        self.append("]");
         Ok(())
     }
 }
 
-impl<'a, W> ser::SerializeTupleStruct for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeTupleStruct for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -313,21 +304,18 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("]")?;
+        self.append("]");
         Ok(())
     }
 }
 
-impl<'a, W> ser::SerializeTupleVariant for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeTupleVariant for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -336,21 +324,18 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("]}")?;
+        self.append("]}");
         Ok(())
     }
 }
 
-impl<'a, W> ser::SerializeMap for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeMap for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -359,7 +344,7 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         key.serialize(&mut *self.0)
     }
@@ -368,20 +353,17 @@ where
     where
         T: ?Sized + Serialize,
     {
-        self.append(":")?;
+        self.append(":");
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("}")?;
+        self.append("}");
         Ok(())
     }
 }
 
-impl<'a, W> ser::SerializeStruct for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeStruct for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -390,23 +372,20 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         key.serialize(&mut *self.0)?;
-        self.append(":")?;
+        self.append(":");
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("}")?;
+        self.append("}");
         Ok(())
     }
 }
 
-impl<'a, W> ser::SerializeStructVariant for Compound<'a, W>
-where
-    W: Write,
-{
+impl<'a> ser::SerializeStructVariant for Compound<'a> {
     type Ok = ();
     type Error = Error;
 
@@ -415,15 +394,15 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first() {
-            self.append(",")?;
+            self.append(",");
         }
         key.serialize(&mut *self.0)?;
-        self.append(":")?;
+        self.append(":");
         value.serialize(&mut *self.0)
     }
 
     fn end(mut self) -> Result<()> {
-        self.append("}}")?;
+        self.append("}}");
         Ok(())
     }
 }
