@@ -73,3 +73,11 @@ fn test_bool() {
     let expected = "0";
     assert_eq!(to_string(&b).unwrap(), expected);
 }
+
+#[test]
+#[wasm_bindgen_test]
+fn test_string() {
+    let s = "\"\\/\x08\x0c\n\r\t";
+    let expected = r#""\"\\\/\b\f\n\r\t""#;
+    assert_eq!(to_string(&s).unwrap(), expected);
+}

@@ -1,4 +1,8 @@
 use crate::{Error, Result};
+use alloc::borrow::Cow;
+use alloc::str::Chars;
+use alloc::string::String;
+use core::convert::TryFrom;
 use core::num::ParseFloatError;
 use core::num::ParseIntError;
 use core::str::FromStr;
@@ -26,6 +30,32 @@ where
 
 pub struct Deserializer<'de>(&'de str);
 
+fn parse_escape(chs: &mut Chars, buf: &mut String, at: &mut usize) -> Result<()> {
+    const S_ERR: Error = Error::ParseError("string escape");
+    let ch = chs.next().ok_or(Error::EndOfString)?;
+    let ch = match ch {
+        '"' | '\\' | '/' => ch,
+        'b' => '\x08',
+        'f' => '\x0c',
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'u' => {
+            let hchs = chs.by_ref().take(4);
+            let mut ch = 0u32;
+            for c in hchs {
+                ch = (ch << 4) + c.to_digit(16).ok_or(S_ERR)?;
+            }
+            *at += 4;
+            char::try_from(ch).map_err(|_| S_ERR)?
+        }
+        _ => return Err(S_ERR),
+    };
+    *at += 1;
+    buf.push(ch);
+    Ok(())
+}
+
 impl<'de> Deserializer<'de> {
     fn trim_start(&mut self) {
         self.0 = self.0.trim_start();
@@ -45,30 +75,39 @@ impl<'de> Deserializer<'de> {
         self.0 = &self.0[ch.len_utf8()..];
         Ok(ch)
     }
-    fn parse_string(&mut self) -> Result<&'de str> {
+    fn parse_string(&mut self) -> Result<Cow<'de, str>> {
         let mut chs = self.0.chars();
         if chs.next() != Some('"') {
             return Err(Error::ParseError("string"));
         }
-        let mut escape = false;
         let mut at = 1;
+        let mut buf = None;
         loop {
             let ch = chs.next().ok_or(Error::EndOfString)?;
-            at += ch.len_utf8();
-            if escape {
-                escape = false;
+            let ch_len = ch.len_utf8();
+            if ch == '\\' {
+                if buf.is_none() {
+                    buf = Some(String::from(&self.0[1..at]));
+                }
+                at += ch_len;
+                parse_escape(&mut chs, buf.as_mut().unwrap(), &mut at)?;
                 continue;
             }
-            if ch == '\\' {
-                escape = true;
-            }
+            at += ch_len;
             if ch == '"' {
                 break;
             }
+            if let Some(s) = buf.as_mut() {
+                s.push(ch)
+            }
         }
-        let start = &self.0[1..at - 1];
+        if let Some(buf) = buf {
+            self.0 = &self.0[at..];
+            return Ok(Cow::Owned(buf));
+        }
+        let s = &self.0[1..at - 1];
         self.0 = &self.0[at..];
-        Ok(start)
+        Ok(Cow::Borrowed(s))
     }
 
     fn parse_bool(&mut self) -> Result<bool> {
@@ -194,7 +233,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         self.trim_start();
-        visitor.visit_i64(i64::from_str(self.parse_string()?)?)
+        visitor.visit_i64(i64::from_str(&self.parse_string()?)?)
     }
 
     fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value>
@@ -226,7 +265,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         self.trim_start();
-        visitor.visit_u64(u64::from_str(self.parse_string()?)?)
+        visitor.visit_u64(u64::from_str(&self.parse_string()?)?)
     }
 
     serde_if_integer128! {
@@ -236,7 +275,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             V: Visitor<'de>,
         {
             self.trim_start();
-            visitor.visit_u128(u128::from_str(self.parse_string()?)?)
+            visitor.visit_u128(u128::from_str(&self.parse_string()?)?)
         }
 
         fn deserialize_i128<V>(self, visitor: V) -> Result<V::Value>
@@ -244,7 +283,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             V: Visitor<'de>,
         {
             self.trim_start();
-            visitor.visit_i128(i128::from_str(self.parse_string()?)?)
+            visitor.visit_i128(i128::from_str(&self.parse_string()?)?)
         }
 
     }
@@ -282,7 +321,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         self.trim_start();
-        visitor.visit_borrowed_str(self.parse_string()?)
+        match self.parse_string()? {
+            Cow::Borrowed(s) => visitor.visit_borrowed_str(s),
+            Cow::Owned(s) => visitor.visit_string(s),
+        }
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
@@ -298,7 +340,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     {
         self.trim_start();
         let s = self.parse_string()?;
-        let b = base64::decode_config(&s, base64::URL_SAFE)?;
+        let b = base64::decode_config(s.as_ref(), base64::URL_SAFE)?;
         visitor.visit_bytes(&b)
     }
 
@@ -308,7 +350,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     {
         self.trim_start();
         let s = self.parse_string()?;
-        let b = base64::decode_config(&s, base64::URL_SAFE)?;
+        let b = base64::decode_config(s.as_ref(), base64::URL_SAFE)?;
         visitor.visit_byte_buf(b)
     }
 

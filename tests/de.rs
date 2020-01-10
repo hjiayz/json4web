@@ -6,8 +6,10 @@ extern crate alloc;
 extern crate wasm_bindgen_test;
 
 use alloc::borrow::ToOwned;
+use alloc::fmt::Debug;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cmp::PartialEq;
 use json4web::de::*;
 use serde_derive::Deserialize;
 
@@ -71,20 +73,6 @@ pub fn test_bytes() {
         base64::encode_config(b, base64::URL_SAFE)
     );
     assert_eq!(expected, from_str(j).unwrap());
-
-    /*
-    #[derive(Deserialize, PartialEq, Debug)]
-    struct B2<'a> {
-        #[serde(with = "serde_bytes")]
-        b: &'a [u8],
-    }
-    let expected = B2 { b };
-    let j = &format!(
-        "{{\"b\":\"{}\"}}",
-        base64::encode_config(b, base64::URL_SAFE)
-    );
-    assert_eq!(expected, from_str(j).unwrap());
-    */
 }
 
 #[test]
@@ -103,4 +91,17 @@ fn test_bool() {
 
     let j = "false";
     assert_eq!(expected, from_str(j).unwrap());
+}
+
+#[cfg(test)]
+fn test<'a, D: serde::Deserialize<'a> + Debug + PartialEq>(expected: D, j: &'a str) {
+    assert_eq!(expected, from_str::<'a, D>(j).unwrap());
+}
+
+#[test]
+#[wasm_bindgen_test]
+fn test_string() {
+    test("\"".to_owned(), r#""\"""#);
+    test("\\".to_owned(), r#""\\""#);
+    test("/\u{8}\u{c}\n\r\t".to_owned(), r#""\/\b\f\n\r\t""#);
 }

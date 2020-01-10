@@ -1,5 +1,4 @@
-use alloc::borrow::Cow;
-use alloc::borrow::ToOwned;
+use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -8,36 +7,55 @@ use serde::{ser, Serialize};
 
 use crate::{Error, Result};
 
-pub struct Serializer(Vec<Cow<'static, [u8]>>);
+pub struct Serializer(Vec<u8>);
+
+pub fn to_string_with_capacity<T>(value: &T, capacity: usize) -> Result<String>
+where
+    T: Serialize,
+{
+    let mut serializer = Serializer(Vec::with_capacity(capacity));
+    value.serialize(&mut serializer)?;
+    Ok(unsafe { String::from_utf8_unchecked(serializer.0) })
+}
 
 pub fn to_string<T>(value: &T) -> Result<String>
 where
     T: Serialize,
 {
-    let mut serializer = Serializer(Vec::new());
-    value.serialize(&mut serializer)?;
-    let mut len = 0;
-    for s in serializer.0.iter() {
-        len += s.len();
-    }
-    let mut result = Vec::with_capacity(len);
-    for s in serializer.0.iter() {
-        result.extend_from_slice(&s);
-    }
-    Ok(unsafe { String::from_utf8_unchecked(result) })
+    to_string_with_capacity(value, 128)
 }
 
 impl Serializer {
     fn append(&mut self, data: &'static str) {
-        self.0.push(Cow::Borrowed(data.as_bytes()))
+        self.0.extend_from_slice(data.as_bytes());
     }
     fn append_string(&mut self, data: String) {
-        self.0.push(Cow::Owned(data.into_bytes()))
+        self.0.extend_from_slice(data.as_bytes());
     }
     fn serialize_simple_string(&mut self, num: String) {
         self.append("\"");
         self.append_string(num);
         self.append("\"");
+    }
+    fn json_escape(&mut self, src: &str) {
+        const ESCAPE: [&str; 6] = ["\\b", "\\t", "\\n", "\\u000b", "\\f", "\\r"];
+        for ch in src.chars() {
+            let c = ch as u8 - 8;
+            if c < 6 {
+                self.append(ESCAPE[c as usize]);
+                continue;
+            }
+            if ch <= '\x1f' {
+                self.append_string(format!("\\u00{:0>2x}", ch as u8));
+                continue;
+            }
+            match ch {
+                '"' => self.append("\\\""),
+                '\\' => self.append("\\\\"),
+                '/' => self.append("\\/"),
+                other => self.append_string(other.to_string()),
+            }
+        }
     }
 }
 impl<'a> ser::Serializer for &'a mut Serializer {
@@ -117,7 +135,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
             return Err(Error::NaN);
         }
         let mut buffer = ryu::Buffer::new();
-        self.append_string(buffer.format_finite(v).to_owned());
+        self.append_string(buffer.format_finite(v).to_string());
         Ok(())
     }
 
@@ -126,7 +144,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
             return Err(Error::NaN);
         }
         let mut buffer = ryu::Buffer::new();
-        self.append_string(buffer.format_finite(v).to_owned());
+        self.append_string(buffer.format_finite(v).to_string());
         Ok(())
     }
 
@@ -136,7 +154,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     fn serialize_str(self, v: &str) -> Result<()> {
         self.append("\"");
-        self.append_string(v.escape_default().to_string());
+        self.json_escape(v);
         self.append("\"");
         Ok(())
     }
