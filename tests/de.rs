@@ -12,6 +12,12 @@ use alloc::vec::Vec;
 use core::cmp::PartialEq;
 use json4web::de::*;
 use serde_derive::Deserialize;
+use serde::serde_if_integer128;
+
+#[cfg(test)]
+fn test<'a, D: serde::Deserialize<'a> + Debug + PartialEq>(expected: D, j: &'a str) {
+    assert_eq!(expected, from_str::<'a, D>(j).unwrap());
+}
 
 #[test]
 #[wasm_bindgen_test]
@@ -93,15 +99,29 @@ fn test_bool() {
     assert_eq!(expected, from_str(j).unwrap());
 }
 
-#[cfg(test)]
-fn test<'a, D: serde::Deserialize<'a> + Debug + PartialEq>(expected: D, j: &'a str) {
-    assert_eq!(expected, from_str::<'a, D>(j).unwrap());
-}
-
 #[test]
 #[wasm_bindgen_test]
 fn test_string() {
     test("\"".to_owned(), r#""\"""#);
     test("\\".to_owned(), r#""\\""#);
     test("/\u{8}\u{c}\n\r\t".to_owned(), r#""\/\b\f\n\r\t""#);
+}
+
+#[test]
+#[wasm_bindgen_test]
+fn test_number() {
+    test(123u8, r#"123"#);
+    test(12345u16, r#"12345"#);
+    test(1234512345u32, r#"1234512345"#);
+    test(1234512345u64, r#""1234512345""#);
+    test(123i8, r#"123"#);
+    test(12345i16, r#"12345"#);
+    test(1234512345i32, r#"1234512345"#);
+    test(1234512345i64, r#""1234512345""#);
+    serde_if_integer128!{
+        test(12345123451234512345u128, r#""12345123451234512345""#);
+        test(12345123451234512345i128, r#""12345123451234512345""#);
+    }
+    test(1.3f32, r#"1.3"#);
+    test(1.3f64, r#"1.3"#);
 }

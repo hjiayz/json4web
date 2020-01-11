@@ -7,6 +7,13 @@ extern crate wasm_bindgen_test;
 use alloc::vec::Vec;
 use json4web::ser::*;
 use serde_derive::Serialize;
+use serde::serde_if_integer128;
+use alloc::fmt::Debug;
+
+#[cfg(test)]
+fn test<S: serde::Serialize + Debug + PartialEq>(ser:S,expected: &str) {
+    assert_eq!(to_string(&ser).unwrap(), expected);
+}
 
 #[test]
 #[wasm_bindgen_test]
@@ -79,5 +86,24 @@ fn test_bool() {
 fn test_string() {
     let s = "\"\\/\x08\x0c\n\r\t";
     let expected = r#""\"\\\/\b\f\n\r\t""#;
-    assert_eq!(to_string(&s).unwrap(), expected);
+    test(s,expected);
+}
+
+#[test]
+#[wasm_bindgen_test]
+fn test_number() {
+    test(123u8, r#"123"#);
+    test(12345u16, r#"12345"#);
+    test(1234512345u32, r#"1234512345"#);
+    test(1234512345u64, r#""1234512345""#);
+    test(123i8, r#"123"#);
+    test(12345i16, r#"12345"#);
+    test(1234512345i32, r#"1234512345"#);
+    test(1234512345i64, r#""1234512345""#);
+    serde_if_integer128!{
+        test(12345123451234512345u128, r#""12345123451234512345""#);
+        test(12345123451234512345i128, r#""12345123451234512345""#);
+    }
+    test(1.3f32, r#"1.3"#);
+    test(1.3f64, r#"1.3"#);
 }
