@@ -132,7 +132,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     fn serialize_f32(self, v: f32) -> Result<()> {
         if !v.is_finite() {
-            return Err(Error::NaN);
+            return self.serialize_unit();
         }
         let mut buffer = ryu::Buffer::new();
         self.append_string(buffer.format_finite(v).to_string());
@@ -141,7 +141,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     fn serialize_f64(self, v: f64) -> Result<()> {
         if !v.is_finite() {
-            return Err(Error::NaN);
+            return self.serialize_unit();
         }
         let mut buffer = ryu::Buffer::new();
         self.append_string(buffer.format_finite(v).to_string());

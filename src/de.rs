@@ -31,8 +31,7 @@ where
 pub struct Deserializer<'de>(&'de str);
 
 fn parse_escape(chs: &mut Chars, buf: &mut String, at: &mut usize) -> Result<()> {
-    const S_ERR: Error = Error::ParseError("string escape");
-    let ch = chs.next().ok_or(Error::EndOfString)?;
+    let ch = chs.next().ok_or(Error::UnexpectedEnd)?;
     let ch = match ch {
         '"' | '\\' | '/' => ch,
         'b' => '\x08',
@@ -44,12 +43,12 @@ fn parse_escape(chs: &mut Chars, buf: &mut String, at: &mut usize) -> Result<()>
             let hchs = chs.by_ref().take(4);
             let mut ch = 0u32;
             for c in hchs {
-                ch = (ch << 4) + c.to_digit(16).ok_or(S_ERR)?;
+                ch = (ch << 4) + c.to_digit(16).ok_or(Error::InvalidUnicodeEscapeSequence)?;
             }
             *at += 4;
-            char::try_from(ch).map_err(|_| S_ERR)?
+            char::try_from(ch).map_err(|_| Error::UnexpectedUnicodeEscapeSequence(ch))?
         }
-        _ => return Err(S_ERR),
+        token => return Err(Error::UnexpectedToken(token)),
     };
     *at += 1;
     buf.push(ch);
@@ -61,12 +60,12 @@ impl<'de> Deserializer<'de> {
         self.0 = self.0.trim_start();
     }
     fn peek_char(&self) -> Result<char> {
-        self.0.chars().next().ok_or(Error::EndOfString)
+        self.0.chars().next().ok_or(Error::UnexpectedEnd)
     }
     fn peek_u8(&self) -> Result<u8> {
         let bytes = self.0.as_bytes();
         if bytes.is_empty() {
-            return Err(Error::EndOfString);
+            return Err(Error::UnexpectedEnd);
         }
         Ok(bytes[0])
     }
@@ -75,15 +74,24 @@ impl<'de> Deserializer<'de> {
         self.0 = &self.0[ch.len_utf8()..];
         Ok(ch)
     }
+    fn assert_next_char(&mut self, rhs: char) -> Result<()> {
+        let ch = self.peek_char()?;
+        if ch != rhs {
+            return Err(Error::UnexpectedToken(ch));
+        }
+        self.0 = &self.0[ch.len_utf8()..];
+        Ok(())
+    }
     fn parse_string(&mut self) -> Result<Cow<'de, str>> {
         let mut chs = self.0.chars();
-        if chs.next() != Some('"') {
-            return Err(Error::ParseError("string"));
+        let first_char = chs.next().ok_or(Error::UnexpectedEnd)?;
+        if first_char != '"' {
+            return Err(Error::UnexpectedToken(first_char));
         }
         let mut at = 1;
         let mut buf = None;
         loop {
-            let ch = chs.next().ok_or(Error::EndOfString)?;
+            let ch = chs.next().ok_or(Error::UnexpectedEnd)?;
             let ch_len = ch.len_utf8();
             if ch == '\\' {
                 if buf.is_none() {
@@ -119,7 +127,7 @@ impl<'de> Deserializer<'de> {
                 return Ok(count & 1 == 0);
             }
         }
-        Err(Error::ParseError("bool"))
+        Err(Error::UnexpectedToken(self.peek_char()?))
     }
 
     fn parse_unsigned<T>(&mut self) -> Result<T>
@@ -160,8 +168,11 @@ impl<'de> Deserializer<'de> {
 
     fn parse_float<T>(&mut self) -> Result<T>
     where
-        T: FromStr<Err = ParseFloatError>,
+        T: FromStr<Err = ParseFloatError> + From<f32>,
     {
+        if self.0.starts_with("null") {
+            return Ok(T::from(core::f32::NAN));
+        }
         let chs = self.0.chars();
         let mut offset = 0usize;
         for ch in chs {
@@ -192,7 +203,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             b'0'..=b'9' | b'-' => self.deserialize_f64(visitor),
             b'[' => self.deserialize_seq(visitor),
             b'{' => self.deserialize_map(visitor),
-            _ => Err(Error::Syntax),
+            _ => Err(Error::UnexpectedToken(self.peek_char()?)),
         }
     }
 
@@ -310,10 +321,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     {
         self.trim_start();
         let s = self.parse_string()?;
-        if s.len() != 1 {
-            return Err(Error::ParseError("char"));
-        }
-        visitor.visit_char(s.chars().next().unwrap())
+        visitor.visit_char(s.chars().next().ok_or(Error::UnexpectedToken('\"'))?)
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value>
@@ -375,7 +383,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             self.0 = &self.0["null".len()..];
             visitor.visit_unit()
         } else {
-            Err(Error::ParseError("unit"))
+            Err(Error::UnexpectedToken(self.peek_char()?))
         }
     }
 
@@ -400,13 +408,11 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         self.trim_start();
         if self.next_char()? == '[' {
             let value = visitor.visit_seq(CommaSeparated::new(&mut self))?;
-            if self.next_char()? == ']' {
-                Ok(value)
-            } else {
-                Err(Error::ParseError("array end"))
-            }
+            self.trim_start();
+            self.assert_next_char(']')?;
+            Ok(value)
         } else {
-            Err(Error::ParseError("array"))
+            Err(Error::UnexpectedToken(self.peek_char()?))
         }
     }
 
@@ -436,15 +442,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         self.trim_start();
-        if self.next_char()? == '{' {
+        let start = self.next_char()?;
+        if start == '{' {
             let value = visitor.visit_map(CommaSeparated::new(&mut self))?;
-            if self.next_char()? == '}' {
+            self.trim_start();
+            let end = self.next_char()?;
+            if end == '}' {
                 Ok(value)
             } else {
-                Err(Error::ParseError("map end"))
+                Err(Error::UnexpectedToken(end))
             }
         } else {
-            Err(Error::ParseError("map"))
+            Err(Error::UnexpectedToken(start))
         }
     }
 
@@ -471,17 +480,21 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         self.trim_start();
-        if self.peek_char()? == '"' {
+        let start = self.peek_char()?;
+        if start == '"' {
             visitor.visit_enum(self.parse_string()?.into_deserializer())
-        } else if self.next_char()? == '{' {
+        } else if start == '{' {
+            self.next_char().unwrap();
             let value = visitor.visit_enum(Enum::new(self))?;
-            if self.next_char()? == '}' {
+            self.trim_start();
+            let end = self.next_char()?;
+            if end == '}' {
                 Ok(value)
             } else {
-                Err(Error::ParseError("map end"))
+                Err(Error::UnexpectedToken(end))
             }
         } else {
-            Err(Error::ParseError("enum"))
+            Err(Error::UnexpectedToken(start))
         }
     }
 
@@ -518,11 +531,12 @@ impl<'de, 'a> SeqAccess<'de> for CommaSeparated<'a, 'de> {
     where
         T: DeserializeSeed<'de>,
     {
+        self.de.trim_start();
         if self.de.peek_char()? == ']' {
             return Ok(None);
         }
-        if !self.first && self.de.next_char()? != ',' {
-            return Err(Error::ParseError("array comma"));
+        if !self.first {
+            self.de.assert_next_char(',')?;
         }
         self.first = false;
         seed.deserialize(&mut *self.de).map(Some)
@@ -536,11 +550,13 @@ impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
     where
         K: DeserializeSeed<'de>,
     {
-        if self.de.peek_char()? == '}' {
+        self.de.trim_start();
+        let token = self.de.peek_char()?;
+        if token == '}' {
             return Ok(None);
         }
-        if !self.first && self.de.next_char()? != ',' {
-            return Err(Error::ParseError("map comma"));
+        if !self.first {
+            self.de.assert_next_char(',')?;
         }
         self.first = false;
         seed.deserialize(&mut *self.de).map(Some)
@@ -550,9 +566,8 @@ impl<'de, 'a> MapAccess<'de> for CommaSeparated<'a, 'de> {
     where
         V: DeserializeSeed<'de>,
     {
-        if self.de.next_char()? != ':' {
-            return Err(Error::ParseError("map colon"));
-        }
+        self.de.trim_start();
+        self.de.assert_next_char(':')?;
         seed.deserialize(&mut *self.de)
     }
 }
@@ -576,11 +591,9 @@ impl<'de, 'a> EnumAccess<'de> for Enum<'a, 'de> {
         V: DeserializeSeed<'de>,
     {
         let val = seed.deserialize(&mut *self.de)?;
-        if self.de.next_char()? == ':' {
-            Ok((val, self))
-        } else {
-            Err(Error::ParseError("map colon"))
-        }
+        self.de.trim_start();
+        self.de.assert_next_char(':')?;
+        Ok((val, self))
     }
 }
 
@@ -588,7 +601,7 @@ impl<'de, 'a> VariantAccess<'de> for Enum<'a, 'de> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {
-        Err(Error::ParseError("string"))
+        Err(Error::UnexpectedToken(self.de.peek_char()?))
     }
 
     fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value>

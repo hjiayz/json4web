@@ -9,32 +9,32 @@ use serde::de::StdError;
 
 #[derive(Debug)]
 pub enum JsonError {
-    Syntax,
-    EndOfString,
+    UnexpectedEnd,
+    InvalidUnicodeEscapeSequence,
+    UnexpectedUnicodeEscapeSequence(u32),
+    UnexpectedToken(char),
     OutOfRange,
     ParseFloatError(ParseFloatError),
     ParseIntError(ParseIntError),
-    TypeMismatch(&'static str, &'static str),
-    ParseError(&'static str),
     Base64Error(DecodeError),
     Utf8Error(Utf8Error),
-    NaN,
     Custom(String),
 }
 
 impl Display for JsonError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            JsonError::Syntax => write!(f, "syntax error"),
-            JsonError::EndOfString => write!(f, "end of string"),
+            JsonError::UnexpectedEnd => write!(f, "Unexpected end of JSON input"),
+            JsonError::InvalidUnicodeEscapeSequence => write!(f, "Invalid Unicode escape sequence"),
+            JsonError::UnexpectedUnicodeEscapeSequence(h) => {
+                write!(f, "Unexpected Unicode escape sequence {:#08X}", h)
+            }
+            JsonError::UnexpectedToken(token) => write!(f, "Unexpected token {}", token),
             JsonError::OutOfRange => write!(f, "out of range"),
             JsonError::ParseFloatError(e) => write!(f, "parse float error : {}", e),
             JsonError::ParseIntError(e) => write!(f, "parse int error : {}", e),
-            JsonError::TypeMismatch(e1, e2) => write!(f, "type mismatch : {0} and {1}", e1, e2),
-            JsonError::ParseError(e) => write!(f, "{} parse error", e),
             JsonError::Base64Error(e) => write!(f, "base64 decode error : {}", e),
             JsonError::Utf8Error(e) => write!(f, "Utf8 error : {}", e),
-            JsonError::NaN => write!(f, "not a number"),
             JsonError::Custom(e) => write!(f, "custom error : {}", e),
         }
     }
